@@ -73,14 +73,17 @@ def run(args: argparse.Namespace) -> int:
     sector = [str(n).strip() for n in cfg.get("sector_corps") or []]
     caps = marketcap.load(min_cap, session) if min_cap else None
     listed = marketcap.load_listed(session, dart_key) if (caps is not None or sector) else None
+    all_codes = None
     if sector:
         caps = marketcap.restrict(caps, sector, listed)
+        if caps is not None and dart_cfg.get("sector_all_filings", True):
+            all_codes = set(caps)  # 업종 회사는 키워드와 상관없이 모든 공시
     if dart_cfg.get("enabled", True):
         if not dart_key:
             log.warning("DART_API_KEY 없음 → DART 건너뜀")
         else:
             try:
-                items += dart.fetch(dart_cfg, keywords, excludes, dart_key, session, caps)
+                items += dart.fetch(dart_cfg, keywords, excludes, dart_key, session, caps, all_codes)
             except Exception as e:
                 errors += 1
                 log.error("DART 조회 실패: %s", e)

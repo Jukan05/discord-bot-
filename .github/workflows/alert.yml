@@ -8,9 +8,9 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: "normal: 평소대로 / test: 최근 3건을 [테스트]로 전송(상태 변경 없음) / seed: 현재 항목을 본 것으로만 기록"
+        description: "normal: 평소대로 / test: 최근 3건을 [테스트]로 전송(상태 변경 없음) / seed: 현재 항목을 본 것으로만 기록 / dry: 보낼 항목을 로그에만 출력"
         type: choice
-        options: [normal, test, seed]
+        options: [normal, test, seed, dry]
         default: normal
 
 permissions:
@@ -49,6 +49,7 @@ jobs:
           case "$MODE" in
             test) python -m alertbot.main --test 3 ;;
             seed) python -m alertbot.main --seed ;;
+            dry)  python -m alertbot.main --dry-run ;;
             *)    python -m alertbot.main ;;
           esac
 

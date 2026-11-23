@@ -14,7 +14,7 @@ import re
 import time
 import zipfile
 from datetime import timedelta
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 import requests
 
@@ -72,8 +72,11 @@ def fetch(
     api_key: str,
     session: requests.Session,
     caps: Optional[Dict[str, Tuple[str, int]]] = None,
+    all_codes: Optional[Set[str]] = None,
 ) -> List[Item]:
-    """caps: 시총 기준을 넘는 {종목코드: (이름, 시총)}. None이면 시총 필터 없음."""
+    """caps: 시총 기준을 넘는 {종목코드: (이름, 시총)}. None이면 시총 필터 없음.
+    all_codes: 키워드와 상관없이 모든 공시를 받을 종목코드 (업종 제한 대상 회사).
+    """
     now = now_kst()
     # 자정 직후에는 전날 밤 공시까지 보도록 어제부터 조회
     days = int(cfg.get("lookback_days", 1)) if now.hour < 2 else 0
@@ -81,6 +84,9 @@ def fetch(
     end = now.date().strftime("%Y%m%d")
     markets = set(cfg.get("markets") or [])
     watch = {str(c).strip() for c in (cfg.get("watch_corps") or [])}
+    all_codes = all_codes or set()
+    # 전체 공시 수신 회사라도 이 보고서들은 건너뜀 (임원 지분 변동처럼 하루 수십 건 나오는 것)
+    skip_reports = [re.sub(r"\s+", "", str(s)) for s in (cfg.get("skip_reports") or [])]
 
     rows: List[dict] = []
     page = 1
@@ -92,7 +98,7 @@ def fetch(
         page += 1
 
     items: List[Item] = []
-    small = 0
+    small = skipped = 0
     for r in rows:
         if markets and r.get("corp_cls") not in markets:
             continue
@@ -100,8 +106,13 @@ def fetch(
         if is_excluded(hay, excludes):
             continue
         code = r.get("stock_code") or ""
-        watched = r["corp_name"] in watch or code in watch
+        watched = r["corp_name"] in watch or code in watch or code in all_codes
         hits = match_keywords(hay, keywords)
+        if (watched or hits) and skip_reports:
+            report = re.sub(r"\s+", "", r["report_nm"])
+            if any(s in report for s in skip_reports):
+                skipped += 1
+                continue
         if watched:
             hits = [r["corp_name"]] + [h for h in hits if h != r["corp_name"]]
         if not hits:
@@ -127,8 +138,8 @@ def fetch(
             )
         )
     log.info(
-        "DART: %s~%s %d페이지 %d건 조회, %d건 매칭 (시총 미달 제외 %d건)",
-        bgn, end, page, len(rows), len(items), small,
+        "DART: %s~%s %d페이지 %d건 조회, %d건 매칭 (시총 미달 제외 %d건, 제외 보고서 %d건)",
+        bgn, end, page, len(rows), len(items), small, skipped,
     )
     return items
 

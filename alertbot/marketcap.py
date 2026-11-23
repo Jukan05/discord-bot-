@@ -90,6 +90,32 @@ def load_listed(session: requests.Session) -> Optional[Dict[str, str]]:
     return {name.strip(): code for name, code in rows}
 
 
+def restrict(
+    caps: Optional[Dict[str, Tuple[str, int]]],
+    sector: List[str],
+    listed: Optional[Dict[str, str]],
+) -> Optional[Dict[str, Tuple[str, int]]]:
+    """통과 대상을 sector_corps 회사로 좁힘 (시총 기준과 AND).
+
+    시총을 못 가져왔거나 시총 기준이 꺼져 있으면 상장사 목록으로 업종 제한만 적용.
+    둘 다 실패하면 None(필터 없음).
+    """
+    wanted = set(sector)
+    if listed:
+        unknown = sorted(wanted - set(listed))
+        if unknown:
+            log.warning("sector_corps 중 상장사 목록에 없는 이름 (오타?): %s", ", ".join(unknown))
+    if caps is not None:
+        out = {c: v for c, v in caps.items() if v[0] in wanted}
+    elif listed:
+        out = {code: (name, 0) for name, code in listed.items() if name in wanted}
+    else:
+        log.warning("시총·상장사 목록 모두 조회 실패 → 이번 실행은 업종 제한 없이 진행")
+        return None
+    log.info("업종 제한: %d개 회사 대상 (%s)", len(out), ", ".join(v[0] for v in out.values()))
+    return out
+
+
 def build_matcher(names: Iterable[str]) -> "re.Pattern[str]":
     alts = sorted({n for n in names if n}, key=len, reverse=True)
     body = "|".join(re.escape(n) for n in alts)

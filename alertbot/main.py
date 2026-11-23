@@ -70,7 +70,11 @@ def run(args: argparse.Namespace) -> int:
     dart_key = os.environ.get("DART_API_KEY", "")
     watch = [str(c).strip() for c in dart_cfg.get("watch_corps") or []]
     min_cap = float(cfg.get("min_market_cap") or 0)
+    sector = [str(n).strip() for n in cfg.get("sector_corps") or []]
     caps = marketcap.load(min_cap, session) if min_cap else None
+    listed = marketcap.load_listed(session) if (caps is not None or sector) else None
+    if sector:
+        caps = marketcap.restrict(caps, sector, listed)
     if dart_cfg.get("enabled", True):
         if not dart_key:
             log.warning("DART_API_KEY 없음 → DART 건너뜀")
@@ -85,7 +89,7 @@ def run(args: argparse.Namespace) -> int:
     if news_cfg.get("enabled", True) and keywords:
         found = news.fetch(news_cfg, keywords, excludes, session)
         if caps is not None:
-            found = marketcap.filter_news(found, caps, watch, marketcap.load_listed(session) if found else None)
+            found = marketcap.filter_news(found, caps, watch, listed)
         items += found
 
     if args.test:

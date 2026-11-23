@@ -2,9 +2,10 @@ name: alert-bot
 
 on:
   schedule:
-    # UTC 기준. 15분마다 (GitHub 사정으로 몇 분씩 지연될 수 있음)
-    # private 레포는 무료 Actions 시간(월 2,000분)을 넘지 않도록 "*/30 * * * *" 권장
-    - cron: "*/15 * * * *"
+    # 30분마다 (GitHub 사정으로 몇 분씩 지연될 수 있음)
+    # private 레포 무료 Actions 한도(월 2,000분) 안에 들어오도록 30분 간격.
+    # public 레포로 바꾸면 "*/15 * * * *"로 줄여도 무료
+    - cron: "*/30 * * * *"
   workflow_dispatch:
 
 permissions:

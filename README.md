@@ -2,7 +2,7 @@
 
 DART 전자공시와 Google 뉴스에서 지정한 키워드가 나오면 Discord 채널로 알림을 보내는 경량 봇입니다.
 요약은 **Claude 구독(Pro/Max)** 으로 Claude Code CLI를 헤드리스 실행해서 만들기 때문에 API 키가 필요 없습니다.
-GitHub Actions cron으로 15분마다 실행되며, 서버를 따로 띄우지 않습니다.
+GitHub Actions cron으로 30분마다 실행되며, 서버를 따로 띄우지 않습니다.
 
 ```
 GitHub Actions (cron) ─▶ DART list.json ─┐
@@ -36,10 +36,10 @@ claude setup-token
 2. 레포 **Settings → Secrets and variables → Actions** 에 위 3개 값을 등록합니다.
 3. **Actions 탭 → alert-bot → Run workflow** 로 한 번 수동 실행합니다.
    - 첫 실행은 **시드 모드**입니다. 현재 있는 공시와 뉴스를 "이미 본 것"으로만 기록하고 알림은 보내지 않습니다(알림 폭탄 방지).
-   - 이후 15분마다 새 항목만 전송합니다.
+   - 이후 30분마다 새 항목만 전송합니다.
 
-**public vs private 레포**: public이면 Actions가 무료로 무제한입니다(Secret은 공개되지 않지만 `config.yaml` 키워드와 `state/seen.json`은 보입니다).
-private이면 무료 한도가 월 2,000분이므로 `.github/workflows/alert.yml`의 cron을 `*/30 * * * *`로 바꾸세요.
+**실행 간격**: private 레포의 무료 Actions 한도(월 2,000분)에 맞춰 30분 간격으로 설정했습니다.
+레포를 public으로 바꾸면 Actions가 무제한 무료라서 `.github/workflows/alert.yml`의 cron을 `*/15 * * * *`로 줄여도 됩니다(Secret은 공개되지 않지만 `config.yaml` 키워드와 `state/seen.json`은 보입니다).
 
 ## 설정 (`config.yaml`)
 

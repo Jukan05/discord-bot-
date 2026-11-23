@@ -7,6 +7,7 @@ from typing import Iterator, List
 
 import requests
 
+from . import marketcap
 from .common import Item, truncate
 
 log = logging.getLogger(__name__)
@@ -24,6 +25,8 @@ def build_embed(item: Item) -> dict:
         if item.publisher:
             fields.append({"name": "제출인", "value": truncate(item.publisher, 1000), "inline": True})
         mkt = MARKET.get(item.extra.get("corp_cls", ""))
+        if item.extra.get("market_cap"):
+            mkt = f"{mkt or ''} · 시총 {marketcap.fmt(item.extra['market_cap'])}".strip(" ·")
         if mkt:
             fields.append({"name": "시장", "value": mkt, "inline": True})
         footer = "DART 전자공시"

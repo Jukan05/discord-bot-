@@ -18,6 +18,7 @@ from typing import List
 
 import requests
 
+from . import marketcap
 from .common import Item, is_excluded, match_keywords, now_kst, strip_html
 
 log = logging.getLogger(__name__)
@@ -89,17 +90,26 @@ def fetch(
             break
         page += 1
 
+    min_cap = float(cfg.get("min_market_cap") or 0)
+    caps = marketcap.load(min_cap, session) if min_cap and rows else None
+
     items: List[Item] = []
+    small = 0
     for r in rows:
         if markets and r.get("corp_cls") not in markets:
             continue
         hay = f"{r['corp_name']} {r['report_nm']}"
         if is_excluded(hay, excludes):
             continue
+        code = r.get("stock_code") or ""
+        watched = r["corp_name"] in watch or code in watch
         hits = match_keywords(hay, keywords)
-        if r["corp_name"] in watch or (r.get("stock_code") or "") in watch:
+        if watched:
             hits = [r["corp_name"]] + [h for h in hits if h != r["corp_name"]]
         if not hits:
+            continue
+        if caps is not None and not watched and code not in caps:
+            small += 1
             continue
         items.append(
             Item(
@@ -114,10 +124,14 @@ def fetch(
                     "rcept_dt": r.get("rcept_dt", ""),
                     "corp_cls": r.get("corp_cls", ""),
                     "rm": r.get("rm", ""),
+                    "market_cap": caps[code][1] if caps and code in caps else None,
                 },
             )
         )
-    log.info("DART: %s~%s %d페이지 %d건 조회, %d건 매칭", bgn, end, page, len(rows), len(items))
+    log.info(
+        "DART: %s~%s %d페이지 %d건 조회, %d건 매칭 (시총 미달 제외 %d건)",
+        bgn, end, page, len(rows), len(items), small,
+    )
     return items
 
 

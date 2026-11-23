@@ -49,6 +49,7 @@ Secret은 공개되지 않지만 `config.yaml` 키워드와 `state/seen.json`은
 - `exclude_keywords`: 이 단어가 들어간 항목은 제외합니다(예: `기재정정`).
 - `dart.watch_corps`: 키워드와 상관없이 모든 공시를 받을 회사(회사명 또는 종목코드).
 - `dart.markets`: `Y` 유가증권, `K` 코스닥, `N` 코넥스, `E` 기타.
+- `dart.min_market_cap`: 시가총액 하한(조원, 기본 3). 이보다 작은 회사의 공시는 키워드가 맞아도 제외합니다. 시총은 매 실행 네이버 증권 시총 순위에서 가져오고, 조회에 실패하면 그 실행만 필터 없이 보냅니다. `watch_corps` 회사는 시총과 무관하게 받습니다.
 - `summary.backend`: `claude_cli`(구독 요약) 또는 `none`.
 
 설정을 바꾸고 push 하면 다음 실행부터 반영됩니다.

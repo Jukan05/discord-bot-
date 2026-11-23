@@ -1,0 +1,44 @@
+# 공시·뉴스 키워드 알림 봇 설정
+# 키워드는 대소문자 구분 없이 "포함" 여부로 매칭합니다.
+
+keywords:
+  - 유상증자
+  - 자기주식
+  - 공급계약
+  - 삼성전자
+
+# 이 단어가 제목/본문에 있으면 알림에서 제외
+exclude_keywords:
+  - 기재정정
+
+dart:
+  enabled: true
+  # 키워드와 상관없이 "모든 공시"를 받아볼 회사 (회사명 또는 6자리 종목코드)
+  watch_corps:
+    - "005930"
+  # 시장 필터. 비우면 전체. Y=유가증권, K=코스닥, N=코넥스, E=기타
+  markets: [Y, K]
+  # 며칠 전 공시부터 조회할지 (0 = 오늘만). 자정 무렵 공시를 놓치지 않도록 1 권장
+  lookback_days: 1
+  # 매칭된 공시의 원문을 내려받아 요약에 사용 (API 호출 1회/건)
+  fetch_body: true
+
+news:
+  enabled: true
+  # Google 뉴스 검색 기간 (예: 1h, 12h, 1d)
+  lookback: 1d
+  # 키워드당 최대 기사 수
+  max_per_keyword: 10
+
+summary:
+  # claude_cli: Claude 구독(Pro/Max)으로 Claude Code CLI를 헤드리스 실행해 요약
+  # none: 요약 없이 제목·발췌만 전송
+  backend: claude_cli
+  model: haiku
+  # 본문/발췌가 이 글자 수 미만이면 요약 생략 (제목만 있는 뉴스는 제목이 곧 요약)
+  min_text_chars: 50
+  # 한 번 실행에서 보낼 최대 알림 수 (나머지는 다음 실행으로 넘어감)
+  max_items_per_run: 20
+
+discord:
+  username: 공시·뉴스 알림

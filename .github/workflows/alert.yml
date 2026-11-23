@@ -1,0 +1,51 @@
+name: alert-bot
+
+on:
+  schedule:
+    # UTC 기준. 15분마다 (GitHub 사정으로 몇 분씩 지연될 수 있음)
+    # private 레포는 무료 Actions 시간(월 2,000분)을 넘지 않도록 "*/30 * * * *" 권장
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: alert-bot
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      # 요약할 새 항목이 있을 때만 봇이 Claude Code CLI를 npm으로 설치함
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - run: pip install -r requirements.txt
+
+      - name: Run bot
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          DART_API_KEY: ${{ secrets.DART_API_KEY }}
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+        run: python -m alertbot.main
+
+      - name: Commit state
+        if: always()
+        run: |
+          git config user.name "alert-bot"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add state/seen.json 2>/dev/null || exit 0
+          git diff --cached --quiet && exit 0
+          git commit -m "chore: update alert state [skip ci]"
+          git pull --rebase --autostash -q && git push -q

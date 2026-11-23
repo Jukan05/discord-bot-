@@ -6,6 +6,12 @@ on:
     # public 레포라 Actions 무료. private으로 돌리면 월 2,000분 한도를 넘으니 "*/30 * * * *"로
     - cron: "*/15 * * * *"
   workflow_dispatch:
+    inputs:
+      mode:
+        description: "normal: 평소대로 / test: 최근 3건을 [테스트]로 전송(상태 변경 없음) / seed: 현재 항목을 본 것으로만 기록"
+        type: choice
+        options: [normal, test, seed]
+        default: normal
 
 permissions:
   contents: write
@@ -38,7 +44,13 @@ jobs:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           DART_API_KEY: ${{ secrets.DART_API_KEY }}
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-        run: python -m alertbot.main
+          MODE: ${{ inputs.mode }}
+        run: |
+          case "$MODE" in
+            test) python -m alertbot.main --test 3 ;;
+            seed) python -m alertbot.main --seed ;;
+            *)    python -m alertbot.main ;;
+          esac
 
       - name: Commit state
         if: always()

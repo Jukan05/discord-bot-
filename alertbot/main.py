@@ -41,6 +41,16 @@ def _sort_key(it: Item) -> str:
     return it.published.strftime("%Y%m%d%H%M%S") if it.published else ""
 
 
+def _pick_test_items(items: List[Item], n: int) -> List[Item]:
+    """테스트용: 최근 공시 위주로 n건 (뉴스 1건 포함해 두 경로 모두 확인)."""
+    newest = sorted(items, key=_sort_key, reverse=True)
+    darts = [i for i in newest if i.source == "dart"]
+    newses = [i for i in newest if i.source == "news"]
+    picked = darts[: max(n - 1, 1)] + newses[:1]
+    rest = [i for i in newest if i not in picked]
+    return (picked + rest)[:n]
+
+
 def run(args: argparse.Namespace) -> int:
     with open(args.config, encoding="utf-8") as f:
         cfg = yaml.safe_load(f) or {}
@@ -58,17 +68,12 @@ def run(args: argparse.Namespace) -> int:
 
     dart_cfg = cfg.get("dart") or {}
     dart_key = os.environ.get("DART_API_KEY", "")
-    new_watermark, new_floor = state.dart_watermark, state.dart_floor
     if dart_cfg.get("enabled", True):
         if not dart_key:
             log.warning("DART_API_KEY 없음 → DART 건너뜀")
         else:
             try:
-                found, new_watermark, new_floor = dart.fetch(
-                    dart_cfg, keywords, excludes, state.dart_watermark, state.dart_floor,
-                    dart_key, session, seed=seed,
-                )
-                items += found
+                items += dart.fetch(dart_cfg, keywords, excludes, dart_key, session)
             except Exception as e:
                 errors += 1
                 log.error("DART 조회 실패: %s", e)
@@ -77,19 +82,23 @@ def run(args: argparse.Namespace) -> int:
     if news_cfg.get("enabled", True) and keywords:
         items += news.fetch(news_cfg, keywords, excludes, session)
 
-    new_items = [it for it in items if not state.is_seen(it.id)]
-    log.info("새 항목 %d건 (전체 매칭 %d건)", len(new_items), len(items))
+    if args.test:
+        new_items = _pick_test_items(items, args.test)
+        log.info("테스트 모드: 최근 매칭 %d건을 [테스트]로 전송 (상태는 저장 안 함)", len(new_items))
+        for it in new_items:
+            it.title = "[테스트] " + it.title
+    else:
+        new_items = [it for it in items if not state.is_seen(it.id)]
+        log.info("새 항목 %d건 (전체 매칭 %d건)", len(new_items), len(items))
 
-    if seed:
+    if seed and not args.test:
         for it in new_items:
             state.mark(it.id)
-        state.dart_watermark, state.dart_floor = new_watermark, new_floor
-        if not args.dry_run:
+        if not args.dry_run and not errors:
             state.save()
-        return 0
+        return 1 if errors else 0
 
     new_items.sort(key=_sort_key)
-    all_new = list(new_items)
     limit = int((cfg.get("summary") or {}).get("max_items_per_run", 20))
     if len(new_items) > limit:
         log.info("이번 실행은 %d건만 전송, 나머지 %d건은 다음 실행으로", limit, len(new_items) - limit)
@@ -117,18 +126,13 @@ def run(args: argparse.Namespace) -> int:
             errors += 1
             log.error("Discord 전송 실패: %s", e)
             break  # 실패분은 seen에 기록하지 않아 다음 실행에서 재시도
+        log.info("Discord 전송 %d건", len(batch))
+        if args.test:
+            continue
         for it in batch:
             state.mark(it.id)
         state.save()  # 배치마다 저장 → 중간 실패해도 중복 전송 최소화
 
-    # 워터마크 전진. 못 보낸 DART 항목(전송 실패·건수 제한)이 있으면 그 바로 앞까지만 전진해
-    # 다음 실행에서 다시 수집되게 함.
-    if not args.dry_run and webhook:
-        unsent = [it.extra["rcept_no"] for it in all_new if it.source == "dart" and not state.is_seen(it.id)]
-        if unsent:
-            new_watermark = min(new_watermark, str(int(min(unsent)) - 1).zfill(len(min(unsent))))
-        state.dart_watermark, state.dart_floor = new_watermark, new_floor
-        state.save()
     return 1 if errors else 0
 
 
@@ -139,6 +143,7 @@ def main() -> None:
     p.add_argument("--dry-run", action="store_true", help="전송·상태 저장 없이 출력만")
     p.add_argument("--seed", action="store_true", help="현재 항목을 본 것으로만 기록")
     p.add_argument("--no-seed", action="store_true", help="상태 파일이 없어도 바로 전송")
+    p.add_argument("--test", type=int, default=0, metavar="N", help="최근 매칭 N건을 [테스트]로 전송 (상태 저장 안 함)")
     p.add_argument("-v", "--verbose", action="store_true")
     args = p.parse_args()
     logging.basicConfig(

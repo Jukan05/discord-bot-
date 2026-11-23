@@ -1,17 +1,20 @@
 """OpenDART 공시 목록 조회 + 키워드 매칭.
 
-- 전체 시장 공시 목록(list.json)을 최신순으로 받아오며,
-  접수번호(rcept_no, 날짜+일련번호로 단조 증가) 워터마크 아래로 내려가면 페이징을 멈춥니다.
-- 늦게 목록에 올라오는 공시를 놓치지 않도록 워터마크를 지난 뒤 1페이지를 더 봅니다.
+오늘 접수된 전체 공시 목록(list.json)을 모든 페이지 훑은 뒤 키워드로 거르고,
+중복은 state의 seen ID로 막습니다. 접수번호는 금감원(00xxxx)·거래소(8xxxxx)·
+공정위(9xxxxx) 계열이 섞여 있어 번호 순서에 기대지 않습니다.
+평일 하루 공시는 보통 1,000~3,000건(10~30페이지)이라 15분 간격이면
+하루 API 한도(20,000건) 안에 들어옵니다.
 """
 from __future__ import annotations
 
 import io
 import logging
 import re
+import time
 import zipfile
 from datetime import timedelta
-from typing import List, Tuple
+from typing import List
 
 import requests
 
@@ -23,7 +26,7 @@ LIST_URL = "https://opendart.fss.or.kr/api/list.json"
 DOC_URL = "https://opendart.fss.or.kr/api/document.xml"
 VIEW_URL = "https://dart.fss.or.kr/dsaf001/main.do?rcpNo={}"
 
-MAX_PAGES = 60
+MAX_PAGES = 100
 BODY_CHARS = 6000
 
 
@@ -32,21 +35,28 @@ class DartError(RuntimeError):
 
 
 def _get_page(session: requests.Session, api_key: str, bgn: str, end: str, page: int) -> dict:
-    r = session.get(
-        LIST_URL,
-        params={
-            "crtfc_key": api_key,
-            "bgn_de": bgn,
-            "end_de": end,
-            "page_no": page,
-            "page_count": 100,
-            "sort": "date",
-            "sort_mth": "desc",
-        },
-        timeout=20,
-    )
-    r.raise_for_status()
-    data = r.json()
+    for attempt in range(3):
+        try:
+            r = session.get(
+                LIST_URL,
+                params={
+                    "crtfc_key": api_key,
+                    "bgn_de": bgn,
+                    "end_de": end,
+                    "page_no": page,
+                    "page_count": 100,
+                    "sort": "date",
+                    "sort_mth": "desc",
+                },
+                timeout=20,
+            )
+            r.raise_for_status()
+            data = r.json()
+            break
+        except (requests.RequestException, ValueError):
+            if attempt == 2:
+                raise
+            time.sleep(2 * (attempt + 1))
     status = data.get("status")
     if status == "013":  # 조회된 데이터 없음
         return {"list": [], "total_page": 0}
@@ -59,50 +69,28 @@ def fetch(
     cfg: dict,
     keywords: List[str],
     excludes: List[str],
-    watermark: str,
-    floor: str,
     api_key: str,
     session: requests.Session,
-    seed: bool = False,
-) -> Tuple[List[Item], str, str]:
-    """매칭 공시, 새 워터마크(조회한 최대 접수번호), 새 floor(조회한 최소 접수번호)를 반환.
-
-    floor 미만은 이전 실행이 본 적 없는 오래된 공시이므로 후보에서 제외.
-    floor~watermark 구간에서 seen에 없는 매칭 공시 = 늦게 올라온 공시 또는 미전송분.
-    """
-    today = now_kst().date()
-    bgn = (today - timedelta(days=int(cfg.get("lookback_days", 1)))).strftime("%Y%m%d")
-    end = today.strftime("%Y%m%d")
+) -> List[Item]:
+    now = now_kst()
+    # 자정 직후에는 전날 밤 공시까지 보도록 어제부터 조회
+    days = int(cfg.get("lookback_days", 1)) if now.hour < 2 else 0
+    bgn = (now.date() - timedelta(days=days)).strftime("%Y%m%d")
+    end = now.date().strftime("%Y%m%d")
     markets = set(cfg.get("markets") or [])
     watch = {str(c).strip() for c in (cfg.get("watch_corps") or [])}
 
     rows: List[dict] = []
-    new_watermark = watermark
-    extra_pages = 1  # 워터마크를 지난 뒤 추가로 볼 페이지 수
     page = 1
     while page <= MAX_PAGES:
         data = _get_page(session, api_key, bgn, end, page)
-        batch = data.get("list", [])
-        if not batch:
-            break
-        rows.extend(batch)
-        new_watermark = max([new_watermark] + [r["rcept_no"] for r in batch])
-        if seed:
-            break  # 첫 실행: 워터마크만 잡고 끝
-        if watermark and min(r["rcept_no"] for r in batch) <= watermark:
-            if extra_pages <= 0:
-                break
-            extra_pages -= 1
+        rows.extend(data.get("list", []))
         if page >= int(data.get("total_page", 0)):
             break
         page += 1
 
-    # 이번에 실제로 평가한 구간의 하한. floor 아래는 평가하지 않았으므로 floor 밑으로 내리지 않음
-    new_floor = max(floor, min((r["rcept_no"] for r in rows), default=floor))
     items: List[Item] = []
     for r in rows:
-        if floor and r["rcept_no"] < floor:
-            continue
         if markets and r.get("corp_cls") not in markets:
             continue
         hay = f"{r['corp_name']} {r['report_nm']}"
@@ -129,8 +117,8 @@ def fetch(
                 },
             )
         )
-    log.info("DART: %d건 조회, %d건 매칭 (watermark %s → %s)", len(rows), len(items), watermark or "-", new_watermark)
-    return items, new_watermark, new_floor
+    log.info("DART: %s~%s %d페이지 %d건 조회, %d건 매칭", bgn, end, page, len(rows), len(items))
+    return items
 
 
 def fetch_body(item: Item, api_key: str, session: requests.Session) -> str:

@@ -10,7 +10,7 @@ KEEP_DAYS = 14
 
 
 class State:
-    """이미 보낸 항목 ID와 DART 조회 위치(접수번호 워터마크)를 저장."""
+    """이미 보낸(또는 시드로 기록한) 항목 ID를 14일간 저장."""
 
     def __init__(self, path: str):
         self.path = path
@@ -20,8 +20,6 @@ class State:
             with open(path, encoding="utf-8") as f:
                 data = json.load(f)
         self.seen: dict = data.get("seen", {})
-        self.dart_watermark: str = data.get("dart_watermark", "")
-        self.dart_floor: str = data.get("dart_floor", "")
 
     def is_seen(self, item_id: str) -> bool:
         return item_id in self.seen
@@ -38,7 +36,7 @@ class State:
         tmp = self.path + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(
-                {"dart_watermark": self.dart_watermark, "dart_floor": self.dart_floor, "seen": self.seen},
+                {"seen": self.seen},
                 f,
                 ensure_ascii=False,
                 indent=1,

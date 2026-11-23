@@ -16,7 +16,7 @@ from typing import List
 import requests
 import yaml
 
-from . import dart, discord, news
+from . import dart, discord, marketcap, news
 from .common import USER_AGENT, Item
 from .state import State
 from .summarize import summarize
@@ -68,19 +68,25 @@ def run(args: argparse.Namespace) -> int:
 
     dart_cfg = cfg.get("dart") or {}
     dart_key = os.environ.get("DART_API_KEY", "")
+    watch = [str(c).strip() for c in dart_cfg.get("watch_corps") or []]
+    min_cap = float(cfg.get("min_market_cap") or 0)
+    caps = marketcap.load(min_cap, session) if min_cap else None
     if dart_cfg.get("enabled", True):
         if not dart_key:
             log.warning("DART_API_KEY 없음 → DART 건너뜀")
         else:
             try:
-                items += dart.fetch(dart_cfg, keywords, excludes, dart_key, session)
+                items += dart.fetch(dart_cfg, keywords, excludes, dart_key, session, caps)
             except Exception as e:
                 errors += 1
                 log.error("DART 조회 실패: %s", e)
 
     news_cfg = cfg.get("news") or {}
     if news_cfg.get("enabled", True) and keywords:
-        items += news.fetch(news_cfg, keywords, excludes, session)
+        found = news.fetch(news_cfg, keywords, excludes, session)
+        if caps is not None:
+            found = marketcap.filter_news(found, caps, watch, marketcap.load_listed(session) if found else None)
+        items += found
 
     if args.test:
         new_items = _pick_test_items(items, args.test)

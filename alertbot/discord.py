@@ -34,6 +34,10 @@ def build_embed(item: Item) -> dict:
             d = item.extra["rcept_dt"]
             footer += f" · {d[:4]}-{d[4:6]}-{d[6:]}"
     else:
+        companies = item.extra.get("companies") or {}
+        if companies:
+            val = ", ".join(f"{n} {marketcap.fmt(c)}" if c else n for n, c in companies.items())
+            fields.append({"name": "종목", "value": truncate(val, 1000), "inline": True})
         footer = f"{item.publisher} · Google 뉴스" if item.publisher else "Google 뉴스"
     embed = {
         "title": truncate(("📢 " if item.source == "dart" else "📰 ") + item.title, 256),

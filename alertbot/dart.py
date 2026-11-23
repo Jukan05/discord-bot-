@@ -14,11 +14,10 @@ import re
 import time
 import zipfile
 from datetime import timedelta
-from typing import List
+from typing import Dict, List, Optional, Tuple
 
 import requests
 
-from . import marketcap
 from .common import Item, is_excluded, match_keywords, now_kst, strip_html
 
 log = logging.getLogger(__name__)
@@ -72,7 +71,9 @@ def fetch(
     excludes: List[str],
     api_key: str,
     session: requests.Session,
+    caps: Optional[Dict[str, Tuple[str, int]]] = None,
 ) -> List[Item]:
+    """caps: 시총 기준을 넘는 {종목코드: (이름, 시총)}. None이면 시총 필터 없음."""
     now = now_kst()
     # 자정 직후에는 전날 밤 공시까지 보도록 어제부터 조회
     days = int(cfg.get("lookback_days", 1)) if now.hour < 2 else 0
@@ -89,9 +90,6 @@ def fetch(
         if page >= int(data.get("total_page", 0)):
             break
         page += 1
-
-    min_cap = float(cfg.get("min_market_cap") or 0)
-    caps = marketcap.load(min_cap, session) if min_cap and rows else None
 
     items: List[Item] = []
     small = 0

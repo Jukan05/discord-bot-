@@ -2,9 +2,12 @@
 from __future__ import annotations
 
 import logging
-from typing import Dict, Optional, Tuple
+import re
+from typing import Dict, Iterable, List, Optional, Tuple
 
 import requests
+
+from .common import Item
 
 log = logging.getLogger(__name__)
 
@@ -47,6 +50,94 @@ def load(min_cap_jo: float, session: requests.Session) -> Optional[Dict[str, Tup
         return None
     log.info("시총 %.1f조 이상 종목 %d개", min_cap_jo, len(result))
     return result
+
+
+# 네이버 종목명과 기사에서 흔히 쓰는 이름이 다른 경우
+ALIASES = {
+    "NAVER": ["네이버"],
+    "현대차": ["현대자동차"],
+    "SK하이닉스": ["하이닉스"],
+    "LG에너지솔루션": ["LG엔솔"],
+    "삼성바이오로직스": ["삼성바이오"],
+}
+# 회사명 바로 뒤에 붙어도 같은 회사로 보는 글자 (조사 등). "한화"+"갤러리아"처럼
+# 다른 글자가 이어지면 다른 회사로 보고 매칭하지 않음. ("로"는 "한화로보틱스" 같은 오탐 때문에 제외)
+_PARTICLES = "은는이가을를의와과도에만측보처까부서랑께향向"
+_HANGUL_ALNUM = "A-Za-z0-9&가-힣"
+_SHORT_HANGUL = re.compile(r"^[가-힣]{1,2}$")
+
+LISTING_URL = "https://kind.krx.co.kr/corpgeneral/corpList.do"
+_ROW_RE = re.compile(r"<tr>\s*<td>(.*?)</td>\s*<td[^>]*>.*?</td>\s*<td[^>]*>(\d{6})</td>", re.S)
+
+
+def load_listed(session: requests.Session) -> Optional[Dict[str, str]]:
+    """KRX KIND 상장법인 전체 목록 {회사명: 종목코드}. 실패하면 None."""
+    try:
+        r = session.get(
+            LISTING_URL,
+            params={"method": "download", "searchType": "13"},
+            headers=HEADERS,
+            timeout=30,
+        )
+        r.raise_for_status()
+        rows = _ROW_RE.findall(r.content.decode("euc-kr", errors="ignore"))
+    except requests.RequestException as e:
+        log.warning("상장사 목록 조회 실패 → 뉴스는 대형주 언급 여부로만 판단: %s", e)
+        return None
+    if len(rows) < 1000:
+        log.warning("상장사 목록이 비정상(%d건) → 뉴스는 대형주 언급 여부로만 판단", len(rows))
+        return None
+    return {name.strip(): code for name, code in rows}
+
+
+def build_matcher(names: Iterable[str]) -> "re.Pattern[str]":
+    alts = sorted({n for n in names if n}, key=len, reverse=True)
+    body = "|".join(re.escape(n) for n in alts)
+    return re.compile(
+        rf"(?<![{_HANGUL_ALNUM}])({body})(?=$|[^{_HANGUL_ALNUM}]|[{_PARTICLES}])",
+        re.IGNORECASE,
+    )
+
+
+def filter_news(
+    items: List[Item],
+    caps: Dict[str, Tuple[str, int]],
+    watch: Iterable[str],
+    listed: Optional[Dict[str, str]] = None,
+) -> List[Item]:
+    """제목에서 처음 언급된 상장사가 시총 기준 이상(또는 관심 회사)인 기사만 남김.
+
+    "휴림로봇, 삼성전기와 공급계약"처럼 소형주가 주어이고 대형주는 거래 상대인 기사는 제외.
+    listed(전체 상장사 목록)가 없으면 대형주 이름이 하나라도 있으면 통과.
+    """
+    # 표기(소문자) → (대표 이름, 시총 또는 None, 통과 여부)
+    names: Dict[str, Tuple[str, Optional[int], bool]] = {}
+    for name, code in (listed or {}).items():
+        if code in caps or _SHORT_HANGUL.match(name):
+            continue  # 대형주는 아래에서, "대상"·"동방" 같은 일반어 소형주 이름은 오탐이 많아 제외
+        names[name.lower()] = (name, None, False)
+    code_to_name = {c: n for n, c in (listed or {}).items()}
+    for w in watch:
+        w_name = caps[w][0] if w in caps else code_to_name.get(w, w)
+        names[w_name.lower()] = (w_name, None, True)
+    for _code, (name, cap) in caps.items():
+        for n in [name] + ALIASES.get(name, []):
+            names[n.lower()] = (name, cap, True)
+    matcher = build_matcher(names.keys())
+
+    kept: List[Item] = []
+    for it in items:
+        subject = None
+        for text in (it.title, it.text):
+            m = matcher.search(text or "")
+            if m:
+                subject = names[m.group(1).lower()]
+                break
+        if subject and subject[2]:
+            it.extra["companies"] = {subject[0]: subject[1]}
+            kept.append(it)
+    log.info("뉴스 시총 필터: %d건 중 %d건 통과", len(items), len(kept))
+    return kept
 
 
 def fmt(cap_eok: int) -> str:

@@ -72,7 +72,7 @@ def run(args: argparse.Namespace) -> int:
     min_cap = float(cfg.get("min_market_cap") or 0)
     sector = [str(n).strip() for n in cfg.get("sector_corps") or []]
     caps = marketcap.load(min_cap, session) if min_cap else None
-    listed = marketcap.load_listed(session) if (caps is not None or sector) else None
+    listed = marketcap.load_listed(session, dart_key) if (caps is not None or sector) else None
     if sector:
         caps = marketcap.restrict(caps, sector, listed)
     if dart_cfg.get("enabled", True):

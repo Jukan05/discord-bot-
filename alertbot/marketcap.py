@@ -1,13 +1,18 @@
-"""시가총액 기준 종목 목록 (네이버 증권 시총 순위)."""
+"""시가총액(네이버 증권)·상장사 목록(KRX/DART) 기반 회사 필터."""
 from __future__ import annotations
 
+import io
+import json
 import logging
+import os
 import re
+import zipfile
+import xml.etree.ElementTree as ET
 from typing import Dict, Iterable, List, Optional, Tuple
 
 import requests
 
-from .common import Item
+from .common import Item, now_kst
 
 log = logging.getLogger(__name__)
 
@@ -67,11 +72,12 @@ _HANGUL_ALNUM = "A-Za-z0-9&가-힣"
 _SHORT_HANGUL = re.compile(r"^[가-힣]{1,2}$")
 
 LISTING_URL = "https://kind.krx.co.kr/corpgeneral/corpList.do"
+DART_CORPCODE_URL = "https://opendart.fss.or.kr/api/corpCode.xml"
+LISTED_CACHE = "state/listed.json"
 _ROW_RE = re.compile(r"<tr>\s*<td>(.*?)</td>\s*<td[^>]*>.*?</td>\s*<td[^>]*>(\d{6})</td>", re.S)
 
 
-def load_listed(session: requests.Session) -> Optional[Dict[str, str]]:
-    """KRX KIND 상장법인 전체 목록 {회사명: 종목코드}. 실패하면 None."""
+def _listed_from_kind(session: requests.Session) -> Optional[Dict[str, str]]:
     try:
         r = session.get(
             LISTING_URL,
@@ -82,12 +88,69 @@ def load_listed(session: requests.Session) -> Optional[Dict[str, str]]:
         r.raise_for_status()
         rows = _ROW_RE.findall(r.content.decode("euc-kr", errors="ignore"))
     except requests.RequestException as e:
-        log.warning("상장사 목록 조회 실패 → 뉴스는 대형주 언급 여부로만 판단: %s", e)
+        log.info("KRX 상장사 목록 실패: %s", e)
         return None
     if len(rows) < 1000:
-        log.warning("상장사 목록이 비정상(%d건) → 뉴스는 대형주 언급 여부로만 판단", len(rows))
+        log.info("KRX 상장사 목록 비정상(%d건)", len(rows))
         return None
     return {name.strip(): code for name, code in rows}
+
+
+def _listed_from_dart(session: requests.Session, api_key: str) -> Optional[Dict[str, str]]:
+    """OpenDART 고유번호 파일(corpCode.xml)에서 종목코드가 있는 회사만."""
+    try:
+        r = session.get(DART_CORPCODE_URL, params={"crtfc_key": api_key}, timeout=60)
+        r.raise_for_status()
+        if not r.content.startswith(b"PK"):
+            log.info("DART 고유번호 파일 오류: %s", r.text[:200])
+            return None
+        with zipfile.ZipFile(io.BytesIO(r.content)) as z:
+            xml = z.read(z.namelist()[0])
+        out: Dict[str, str] = {}
+        for el in ET.fromstring(xml).iter("list"):
+            code = (el.findtext("stock_code") or "").strip()
+            name = (el.findtext("corp_name") or "").strip()
+            if len(code) == 6 and name:
+                out[name] = code
+    except (requests.RequestException, zipfile.BadZipFile, ET.ParseError) as e:
+        log.info("DART 고유번호 파일 실패: %s", e)
+        return None
+    return out if len(out) >= 1000 else None
+
+
+def load_listed(
+    session: requests.Session, dart_key: str = "", cache_path: str = LISTED_CACHE
+) -> Optional[Dict[str, str]]:
+    """상장사 전체 목록 {회사명: 종목코드}. 하루 한 번만 새로 받고 state/listed.json에 캐시.
+
+    KRX KIND → (실패 시) OpenDART 고유번호 파일 → (둘 다 실패 시) 예전 캐시 순으로 사용.
+    """
+    today = now_kst().date().isoformat()
+    cache = None
+    if os.path.exists(cache_path):
+        try:
+            with open(cache_path, encoding="utf-8") as f:
+                cache = json.load(f)
+        except (OSError, ValueError):
+            cache = None
+    if cache and cache.get("date") == today:
+        return cache["listed"]
+
+    listed, source = _listed_from_kind(session), "krx"
+    if listed is None and dart_key:
+        listed, source = _listed_from_dart(session, dart_key), "dart"
+    if listed:
+        os.makedirs(os.path.dirname(cache_path) or ".", exist_ok=True)
+        with open(cache_path, "w", encoding="utf-8") as f:
+            json.dump({"date": today, "source": source, "listed": listed}, f, ensure_ascii=False, indent=0, sort_keys=True)
+            f.write("\n")
+        log.info("상장사 목록 %d개 갱신 (%s)", len(listed), source)
+        return listed
+    if cache:
+        log.warning("상장사 목록 조회 실패 → %s자 캐시 사용", cache.get("date"))
+        return cache["listed"]
+    log.warning("상장사 목록 조회 실패, 캐시도 없음 → 뉴스는 대형주 언급 여부로만 판단")
+    return None
 
 
 def restrict(
